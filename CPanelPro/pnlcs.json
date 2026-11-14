@@ -1,0 +1,10 @@
+{
+    "name": "cpanelpro",
+    "type": "server",
+    "class": "Modules\\Servers\\CPanelPro\\CPanelProModule",
+    "provider": "Modules\\Servers\\CPanelPro\\CPanelProServiceProvider",
+    "version": "1.1.0",
+    "display_name": "cPanel/WHM Pro",
+    "description": "Everything the built-in cPanel/WHM module does, plus File Manager, Email, Databases, FTP, Subdomains, DNS, Cron and Backups in the client portal, a one-click \"Log in to cPanel\" button, live usage, and one-click cPanel/WHM logins for staff",
+    "author": {"name": "Bizfunnel"}
+}
