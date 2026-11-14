@@ -14,6 +14,7 @@
  */
 
 use App\Models\Server;
+use App\Models\Service;
 use Illuminate\Support\Facades\Route;
 
 add_hook('AdminAreaFooterOutput', 60, function () {
@@ -65,6 +66,30 @@ HTML;
         }
 
         return $out;
+    } catch (\Throwable) {
+    }
+
+    return '';
+});
+
+/*
+ * Client service page: the hosting-tools grid shows "Soon" tiles for features
+ * only Panelica servers have (apps/containers, Laravel, Node.js, Python).
+ * They are hidden on cPanel/WHM Pro services so clients see only working tools.
+ */
+add_hook('ClientAreaFooterOutput', 60, function () {
+    try {
+        $route = request()->route();
+        if ($route?->getName() !== 'client.services.show') {
+            return '';
+        }
+        $service = $route->parameter('service');
+        if (! $service instanceof Service) {
+            $service = Service::with(['server', 'product'])->find($service);
+        }
+        $type = strtolower((string) ($service?->server?->type ?? $service?->product?->server_type ?? ''));
+
+        return $type === 'cpanelpro' ? '<style>.sv-apps .sv-app.soon{display:none!important}</style>' : '';
     } catch (\Throwable) {
     }
 

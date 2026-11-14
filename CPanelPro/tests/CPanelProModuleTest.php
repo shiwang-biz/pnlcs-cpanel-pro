@@ -216,6 +216,15 @@ function cpFakeAll(): void
                 ['file' => 'backup-11.14.2026_10-00-00_asha123.tar.gz', 'type' => 'file', 'size' => 52428800, 'mtime' => 1763114400, 'nicemode' => '0600'],
             ],
             'Fileman::get_file_content' => ['content' => 'hello world', 'dir' => $p['dir'] ?? '', 'filename' => $p['file'] ?? ''],
+            // 1.2 extras
+            'SSL::installed_hosts' => [['servername' => 'asha.example.com', 'certificate' => ['domains' => ['asha.example.com', 'www.asha.example.com'], 'not_after' => time() + 60 * 86400, 'issuer.organizationName' => "Let's Encrypt", 'is_self_signed' => 0]]],
+            'LangPHP::php_get_installed_versions' => ['versions' => ['ea-php81', 'ea-php83']],
+            'LangPHP::php_get_vhost_versions' => [['vhost' => 'asha.example.com', 'version' => 'ea-php81'], ['vhost' => 'other-customer.com', 'version' => 'ea-php83']],
+            'LangPHP::php_ini_get_user_basic_directives' => ['directives' => [['key' => 'memory_limit', 'value' => '128M'], ['key' => 'upload_max_filesize', 'value' => '2M'], ['key' => 'display_errors', 'value' => 'Off']]],
+            'Email::list_forwarders' => ($p['domain'] ?? '') === 'asha.example.com' ? [['dest' => 'sales@asha.example.com', 'forward' => 'asha@gmail.com']] : [],
+            'Email::list_auto_responders' => ($p['domain'] ?? '') === 'asha.example.com' ? [['email' => 'info@asha.example.com', 'subject' => 'Away']] : [],
+            'Email::list_default_address' => [['domain' => $p['domain'] ?? '', 'defaultaddress' => ':fail: No Such User Here']],
+            'Stats::get_site_errors' => [['date' => 1763100000, 'entry' => 'PHP Fatal error: oops in /home/asha123/public_html/index.php']],
             default => null,
         };
 
@@ -233,6 +242,8 @@ function cpFakeAll(): void
                 ['line' => 14, 'type' => 'MX', 'name' => 'asha.example.com.', 'exchange' => 'mail.asha.example.com.', 'preference' => 0, 'ttl' => 14400],
                 ['line' => 15, 'type' => ':RAW', 'raw' => '; comment'],
             ],
+            'AddonDomain::listaddondomains' => [['domain' => 'shop.example.net', 'dir' => '/home/asha123/public_html/shop.example.net', 'domainkey' => 'shop_asha.example.com']],
+            'DenyIp::listdenyips' => [['ip' => '198.51.100.66']],
             'Cron::listcron' => [['line' => 1, 'minute' => '*/5', 'hour' => '*', 'day' => '*', 'month' => '*', 'weekday' => '*', 'command' => 'php /home/asha123/cron.php'], ['count' => 1]],
             default => [['result' => 1]],
         };
@@ -249,7 +260,11 @@ function cpFakeAll(): void
             return Http::response($api2($r['cpanel_jsonapi_module'], $r['cpanel_jsonapi_func']));
         }
         if (str_ends_with($url, '/json-api/create_user_session')) {
-            return Http::response(['metadata' => ['result' => 1], 'data' => ['url' => 'https://whm.example.test:2083/cpsess4242/login/?session=x']]);
+            if (($r['service'] ?? '') === 'webmaild') {
+                return Http::response(['metadata' => ['result' => 1], 'data' => ['url' => 'https://whm.example.test:2096/cpsess77/login/?session='.$r['user']]]);
+            }
+
+            return Http::response(['metadata' => ['result' => 1], 'data' => ['url' => 'https://whm.example.test:2083/cpsess4242/login/?session=x'.(isset($r['app']) ? '&goto_app='.$r['app'] : '')]]);
         }
         if (str_contains($url, ':2083/cpsess4242/login')) {
             return Http::response('ok', 200, ['Set-Cookie' => 'cpsession=abc; path=/']);
@@ -449,4 +464,208 @@ test('another client cannot open or change this account\'s tools', function () {
     $this->actingAs($stranger)->get("{$base}/emails")->assertForbidden();
     $this->actingAs($stranger)->post("{$base}/databases", ['domain_id' => 'account', 'database_name' => 'x', 'database_user' => 'y', 'password' => 'Str0ng-pass!'])->assertForbidden();
     expect(cpSent('Mysql', 'create_database'))->toBe([]);
+});
+
+
+// ---------------------------------------------------------------------------
+// 1.2: extra tools
+// ---------------------------------------------------------------------------
+
+test('service page: "Soon" tiles hidden and the extra tools offered', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+
+    $this->actingAs($user)->get(route('client.services.show', $service))->assertOk()
+        ->assertSee('.sv-apps .sv-app.soon{display:none!important}', false)
+        ->assertSee('id="cpanelpro-tools"', false)
+        ->assertSee(route('client.services.cpanelpro.ssl', $service), false)
+        ->assertSee(route('client.services.cpanelpro.phpmyadmin', $service), false)
+        ->assertSee(route('client.services.cpanelpro.ipblock', $service), false);
+});
+
+test('a plain cPanel service keeps its "Soon" tiles and gets no extras', function () {
+    cpFakeAll();
+    [$user, $service] = cpService(cpServer(['type' => 'cpanel', 'hostname' => 'plain.example.test']));
+    $service->product->update(['server_type' => 'cpanel']);
+
+    $this->actingAs($user)->get(route('client.services.show', $service))->assertOk()
+        ->assertDontSee('.sv-apps .sv-app.soon{display:none', false)
+        ->assertDontSee('id="cpanelpro-tools"', false);
+    $this->actingAs($user)->get(route('client.services.cpanelpro.ssl', $service))->assertNotFound();
+});
+
+test('every extra page opens and shows the account\'s own data', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->get(route('client.services.cpanelpro.ssl', $service))->assertOk()->assertSee("Let's Encrypt")->assertSee('shop.example.net');
+    $as->get(route('client.services.cpanelpro.php', $service))->assertOk()->assertSee('PHP 8.3')->assertSee('128M')->assertDontSee('other-customer.com');
+    $as->get(route('client.services.cpanelpro.email', $service))->assertOk()->assertSee('sales@asha.example.com')->assertSee('Away')->assertSee('Bounce back to sender');
+    $as->get(route('client.services.cpanelpro.domains', $service))->assertOk()->assertSee('public_html/shop.example.net');
+    $as->get(route('client.services.cpanelpro.errors', $service))->assertOk()->assertSee('PHP Fatal error: oops');
+    $as->get(route('client.services.cpanelpro.ipblock', $service))->assertOk()->assertSee('198.51.100.66');
+    $as->get(route('client.services.cpanelpro.webmail', $service))->assertOk()->assertSee('info@asha.example.com');
+});
+
+test('phpMyAdmin and webmail open signed in; webmail only for own mailboxes', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+
+    $this->actingAs($user)->post(route('client.services.cpanelpro.phpmyadmin', $service))
+        ->assertRedirect('https://whm.example.test:2083/cpsess4242/login/?session=x&goto_app=Database_phpMyAdmin');
+    $this->actingAs($user)->post(route('client.services.cpanelpro.webmail.login', $service), ['email' => 'info@asha.example.com'])
+        ->assertRedirect('https://whm.example.test:2096/cpsess77/login/?session=info@asha.example.com');
+    $this->actingAs($user)->post(route('client.services.cpanelpro.webmail.login', $service), ['email' => 'boss@other-customer.com'])
+        ->assertRedirect()->assertSessionHas('error');
+
+    Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'create_user_session') && ($r['user'] ?? '') === 'boss@other-customer.com');
+});
+
+test('SSL: run AutoSSL, HTTPS redirect for own domains only', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->post(route('client.services.cpanelpro.ssl.autossl', $service))->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.ssl.redirect', $service), ['domain' => 'asha.example.com', 'state' => '1'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.ssl.redirect', $service), ['domain' => 'evil.com', 'state' => '1'])->assertSessionHas('error');
+
+    expect(cpSent('SSL', 'start_autossl_check'))->toHaveCount(1)
+        ->and(cpSent('SSL', 'toggle_ssl_redirect_for_domains'))->toHaveCount(1)
+        ->and(cpSent('SSL', 'toggle_ssl_redirect_for_domains')[0]['domains'])->toBe('asha.example.com');
+});
+
+test('PHP: version only from installed list, settings validated, other vhosts refused', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->post(route('client.services.cpanelpro.php.version', $service), ['domain' => 'asha.example.com', 'version' => 'ea-php83'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.php.version', $service), ['domain' => 'asha.example.com', 'version' => 'ea-php56'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.php.version', $service), ['domain' => 'other-customer.com', 'version' => 'ea-php83'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.php.settings', $service), ['domain' => 'asha.example.com', 'ini' => ['memory_limit' => '512M', 'max_execution_time' => '300']])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.php.settings', $service), ['domain' => 'asha.example.com', 'ini' => ['memory_limit' => '1G; rm -rf']])->assertSessionHas('error');
+
+    $set = cpSent('LangPHP', 'php_ini_set_user_basic_directives');
+    expect(cpSent('LangPHP', 'php_set_vhost_versions'))->toHaveCount(1)
+        ->and($set)->toHaveCount(1)
+        ->and($set[0]['directive-1'])->toBe('memory_limit:512M')
+        ->and($set[0]['directive-2'])->toBe('max_execution_time:300');
+});
+
+test('email extras: forwarders, autoresponders and catch-all stay within the account', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->post(route('client.services.cpanelpro.email.forwarders.store', $service), ['local_part' => 'hello', 'domain' => 'asha.example.com', 'target' => 'me@gmail.com'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.email.forwarders.store', $service), ['local_part' => 'hello', 'domain' => 'other-customer.com', 'target' => 'me@gmail.com'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.email.forwarders.destroy', $service), ['from' => 'sales@asha.example.com', 'to' => 'asha@gmail.com'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.email.forwarders.destroy', $service), ['from' => 'ceo@other-customer.com', 'to' => 'x@y.com'])->assertSessionHas('error');
+
+    $as->post(route('client.services.cpanelpro.email.autoresponders.store', $service), ['email' => 'info@asha.example.com', 'from' => 'Asha', 'subject' => 'Away', 'body' => 'Back Monday'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.email.autoresponders.store', $service), ['email' => 'ceo@other-customer.com', 'from' => 'X', 'subject' => 'S', 'body' => 'B'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.email.autoresponders.destroy', $service), ['email' => 'info@asha.example.com'])->assertSessionHas('success');
+
+    $as->post(route('client.services.cpanelpro.email.catchall', $service), ['domain' => 'asha.example.com', 'mode' => 'fwd', 'target' => 'all@gmail.com'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.email.catchall', $service), ['domain' => 'asha.example.com', 'mode' => 'fwd'])->assertSessionHasErrors('target');
+
+    expect(cpSent('Email', 'add_forwarder'))->toHaveCount(1)
+        ->and(cpSent('Email', 'add_forwarder')[0]['email'])->toBe('hello@asha.example.com')
+        ->and(cpSent('Email', 'delete_forwarder'))->toHaveCount(1)
+        ->and(cpSent('Email', 'add_auto_responder')[0])->toMatchArray(['email' => 'info', 'domain' => 'asha.example.com', 'subject' => 'Away'])
+        ->and(cpSent('Email', 'set_default_address')[0])->toMatchArray(['domain' => 'asha.example.com', 'fwdopt' => 'fwd', 'fwdemail' => 'all@gmail.com']);
+});
+
+test('domains: addon with folder fenced to home, delete own addon, aliases', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->post(route('client.services.cpanelpro.domains.addon.store', $service), ['domain' => 'new-site.com'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.domains.addon.store', $service), ['domain' => 'bad.com', 'dir' => '../../etc'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.domains.addon.store', $service), ['domain' => 'not a domain'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.domains.addon.destroy', $service), ['domain' => 'shop.example.net'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.domains.addon.destroy', $service), ['domain' => 'someone-else.com'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.domains.alias.store', $service), ['domain' => 'asha.net'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.domains.alias.destroy', $service), ['domain' => 'not-mine.net'])->assertSessionHas('error');
+
+    $add = cpSent('AddonDomain', 'addaddondomain');
+    expect($add)->toHaveCount(1)
+        ->and($add[0])->toMatchArray(['cpanel_jsonapi_user' => 'asha123', 'newdomain' => 'new-site.com', 'subdomain' => 'newsite', 'dir' => 'public_html/new-site.com'])
+        ->and(cpSent('AddonDomain', 'deladdondomain')[0])->toMatchArray(['domain' => 'shop.example.net', 'subdomain' => 'shop_asha.example.com'])
+        ->and(cpSent('Park', 'park'))->toHaveCount(1)
+        ->and(cpSent('Park', 'unpark'))->toHaveCount(0);
+});
+
+test('IP blocker: valid addresses and ranges only; unblock only listed ones', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    foreach (['203.0.113.7', '203.0.113.0/24', '203.0.113.1-203.0.113.9', '2001:db8::/48'] as $ok) {
+        $as->post(route('client.services.cpanelpro.ipblock.store', $service), ['ip' => $ok])->assertSessionHas('success');
+    }
+    foreach (['0.0.0.0/0', '10.0.0.0/8', 'not-an-ip', '1.2.3.4; reboot'] as $bad) {
+        $as->post(route('client.services.cpanelpro.ipblock.store', $service), ['ip' => $bad])->assertSessionHas('error');
+    }
+    $as->post(route('client.services.cpanelpro.ipblock.destroy', $service), ['ip' => '198.51.100.66'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.ipblock.destroy', $service), ['ip' => '192.0.2.1'])->assertSessionHas('error');
+
+    expect(cpSent('DenyIp', 'adddenyip'))->toHaveCount(4)->and(cpSent('DenyIp', 'deldenyip'))->toHaveCount(1);
+});
+
+test('extras: strangers are refused; a suspended service can be viewed but not changed', function () {
+    cpFakeAll();
+    [, $service] = cpService();
+    $stranger = User::factory()->create();
+    $this->actingAs($stranger)->get(route('client.services.cpanelpro.ssl', $service))->assertForbidden();
+    $this->actingAs($stranger)->post(route('client.services.cpanelpro.ipblock.store', $service), ['ip' => '203.0.113.7'])->assertForbidden();
+    $this->actingAs($stranger)->post(route('client.services.cpanelpro.phpmyadmin', $service))->assertForbidden();
+
+    [$owner, $suspended] = cpService(null, ['status' => 'Suspended', 'username' => 'susp2']);
+    $this->actingAs($owner)->get(route('client.services.cpanelpro.ipblock', $suspended))->assertOk();
+    $this->actingAs($owner)->post(route('client.services.cpanelpro.ipblock.store', $suspended), ['ip' => '203.0.113.7'])->assertRedirect()->assertSessionHas('error');
+    $this->actingAs($owner)->post(route('client.services.cpanelpro.phpmyadmin', $suspended))->assertSessionHas('error');
+
+    [$owner2, $gone] = cpService(null, ['status' => 'Terminated', 'username' => 'gone1']);
+    $this->actingAs($owner2)->get(route('client.services.cpanelpro.ssl', $gone))->assertNotFound();
+
+    expect(cpSent('DenyIp', 'adddenyip'))->toHaveCount(0);
+});
+
+test('DNS: SRV and CAA records can be added', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+    $zone = route('client.services.dns.store', $service);
+
+    $as->post($zone, ['domain_id' => 'asha.example.com', 'name' => '_sip._tcp', 'type' => 'SRV', 'content' => '5 5060 sip.asha.example.com', 'priority' => 10, 'ttl' => 3600])->assertSessionHas('success');
+    $as->post($zone, ['domain_id' => 'asha.example.com', 'name' => '@', 'type' => 'CAA', 'content' => '0 issue "letsencrypt.org"', 'ttl' => 3600])->assertSessionHas('success');
+    $as->post($zone, ['domain_id' => 'asha.example.com', 'name' => '@', 'type' => 'CAA', 'content' => 'garbage', 'ttl' => 3600])->assertSessionHas('error');
+
+    $adds = cpSent('ZoneEdit', 'add_zone_record');
+    expect($adds)->toHaveCount(2)
+        ->and($adds[0])->toMatchArray(['type' => 'SRV', 'priority' => 10, 'weight' => 5, 'port' => 5060, 'target' => 'sip.asha.example.com.'])
+        ->and($adds[1])->toMatchArray(['type' => 'CAA', 'flag' => 0, 'tag' => 'issue', 'value' => 'letsencrypt.org']);
+});
+
+test('Live Servers: health endpoint for staff with server access', function () {
+    Http::fake([
+        WHM.'systemloadavg' => Http::response(['metadata' => ['result' => 1], 'data' => ['one' => '0.52', 'five' => '0.61', 'fifteen' => '0.70']]),
+        WHM.'getdiskusage' => Http::response(['metadata' => ['result' => 1], 'data' => ['partition' => [
+            ['mount' => '/', 'used' => 10485760, 'available' => 10485760, 'percentage' => '50%'],
+            ['mount' => '/boot', 'used' => 100, 'available' => 900],
+        ]]]),
+        WHM.'get_current_users_count' => Http::response(['metadata' => ['result' => 1], 'data' => ['users' => 42]]),
+    ]);
+    $server = cpServer();
+
+    $h = $this->actingAs(cpAdmin(), 'admin')->getJson(route('cpanelpro.admin.health', $server))->assertOk()->json();
+    expect($h['load']['one'])->toEqual(0.52)
+        ->and($h['disks'])->toBe([['mount' => '/', 'percent' => 50, 'used_gb' => 10, 'total_gb' => 20]])
+        ->and($h['accounts'])->toBe(42);
+
+    $this->actingAs(cpAdmin(false), 'admin')->getJson(route('cpanelpro.admin.health', $server))->assertForbidden();
 });

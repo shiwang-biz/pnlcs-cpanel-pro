@@ -29,6 +29,7 @@ use Modules\Servers\CPanel\CPanelModule;
 class CPanelProModule extends CPanelModule
 {
     use CPanelTools;
+    use CPanelExtras;
 
     public function getModuleName(): string
     {
@@ -255,6 +256,57 @@ class CPanelProModule extends CPanelModule
         }
 
         return ['success' => true, 'message' => 'OK', 'url' => $url];
+    }
+
+    /**
+     * Load, disk and account count for the Live Servers box, cached a minute.
+     *
+     * @return array{ok: bool, load: ?array, disks: list<array{mount:string, percent:int, used_gb:float, total_gb:float}>, accounts: ?int}
+     */
+    public function serverHealth(Server $server): array
+    {
+        return \Illuminate\Support\Facades\Cache::remember('cpanelpro.health.'.$server->id, 60, function () use ($server) {
+            $load = $this->whm($server, 'systemloadavg', [], 10);
+            $disk = $this->whm($server, 'getdiskusage', [], 10);
+            $users = $this->whm($server, 'get_current_users_count', [], 10);
+
+            $disks = [];
+            foreach ((array) ($disk['raw']['partition'] ?? []) as $p) {
+                $mount = (string) ($p['mount'] ?? '');
+                if (! in_array($mount, ['/', '/home', '/var', '/backup'], true) && ! str_starts_with($mount, '/home')) {
+                    continue;
+                }
+                $used = (float) ($p['used'] ?? 0);
+                $avail = (float) ($p['available'] ?? 0);
+                $disks[] = [
+                    'mount' => $mount,
+                    'percent' => (int) rtrim((string) ($p['percentage'] ?? ($used + $avail > 0 ? round($used / ($used + $avail) * 100) : 0)), '%'),
+                    'used_gb' => round($used / 1048576, 1),        // WHM reports KB
+                    'total_gb' => round(($used + $avail) / 1048576, 1),
+                ];
+            }
+
+            return [
+                'ok' => $load['success'] || $disk['success'],
+                'load' => $load['success'] ? ['one' => (float) ($load['raw']['one'] ?? 0), 'five' => (float) ($load['raw']['five'] ?? 0), 'fifteen' => (float) ($load['raw']['fifteen'] ?? 0)] : null,
+                'disks' => $disks,
+                'accounts' => $users['success'] ? (int) ($users['raw']['users'] ?? 0) : null,
+            ];
+        });
+    }
+
+    /**
+     * The extra tools on the client's service page (SSL, PHP, email extras,
+     * domains, error log, IP blocker, phpMyAdmin, webmail). Drawn into the
+     * page's own hosting-tools grid; shown on its own if that grid is absent.
+     */
+    public function clientAreaPanel(Service $service): ?Htmlable
+    {
+        if (! $this->cpAccount($service) || strtolower((string) $service->status) !== 'active') {
+            return null;
+        }
+
+        return new HtmlString(view('cpanelpro::client.panel', ['service' => $service])->render());
     }
 
     /** The links shown on the staff service page. */

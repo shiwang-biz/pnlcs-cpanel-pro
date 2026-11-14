@@ -613,7 +613,7 @@ trait CPanelTools
 
     public function dnsRecordTypes(): array
     {
-        return ['A', 'AAAA', 'CNAME', 'MX', 'TXT'];
+        return ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'CAA'];
     }
 
     public function dnsRecords(Service $service, ?string $onlyDomainId = null): array
@@ -648,7 +648,7 @@ trait CPanelTools
                     'name' => $name,
                     'content' => self::recordContent($type, $r),
                     'ttl' => isset($r['ttl']) ? (int) $r['ttl'] : null,
-                    'priority' => $type === 'MX' ? (int) ($r['preference'] ?? 0) : null,
+                    'priority' => match ($type) { 'MX' => (int) ($r['preference'] ?? 0), 'SRV' => (int) ($r['priority'] ?? 0), default => null },
                     'protected' => self::protectedRecord($type, $name),
                 ];
             }
@@ -688,6 +688,9 @@ trait CPanelTools
             'NS' => rtrim((string) ($r['nsdname'] ?? $r['record'] ?? ''), '.'),
             'TXT' => $r['txtdata'] ?? $r['record'] ?? '',
             'SOA' => trim(($r['mname'] ?? '').' '.($r['rname'] ?? '').' '.($r['serial'] ?? '')),
+            // SRV and CAA as written in a zone file, priority in its own field.
+            'SRV' => trim(($r['weight'] ?? '').' '.($r['port'] ?? '').' '.rtrim((string) ($r['target'] ?? ''), '.')),
+            'CAA' => trim(($r['flag'] ?? '0').' '.($r['tag'] ?? '').' "'.trim((string) ($r['value'] ?? ''), '"').'"'),
             default => $r['record'] ?? '',
         };
     }
@@ -709,6 +712,12 @@ trait CPanelTools
             'CNAME' => preg_match('/^[a-z0-9.-]+\.?$/i', $content) ? ['cname' => rtrim($content, '.').'.'] : null,
             'MX' => preg_match('/^[a-z0-9.-]+\.?$/i', $content) ? ['exchange' => rtrim($content, '.').'.', 'preference' => $priority ?? 10] : null,
             'TXT' => $content !== '' ? ['txtdata' => $content] : null,
+            // "weight port target", e.g. "5 5060 sip.example.com"
+            'SRV' => preg_match('/^(\d{1,5})\s+(\d{1,5})\s+([a-z0-9._-]+?)\.?$/i', $content, $m) && (int) $m[1] <= 65535 && (int) $m[2] <= 65535
+                ? ['priority' => $priority ?? 0, 'weight' => (int) $m[1], 'port' => (int) $m[2], 'target' => $m[3].'.'] : null,
+            // "flag tag value", e.g. 0 issue "letsencrypt.org"
+            'CAA' => preg_match('/^(\d{1,3})\s+(issue|issuewild|iodef)\s+"?([^"]+)"?$/i', $content, $m) && (int) $m[1] <= 255
+                ? ['flag' => (int) $m[1], 'tag' => strtolower($m[2]), 'value' => $m[3]] : null,
             default => null,
         };
     }

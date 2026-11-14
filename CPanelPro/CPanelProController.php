@@ -59,4 +59,12 @@ class CPanelProController extends Controller
 
         return redirect()->away($result['url']);
     }
+
+    /** Load, disk and account count for the Live Servers box (cached 60s). */
+    public function health(Server $server)
+    {
+        abort_unless(self::isPro($server->type), 404);
+
+        return response()->json($this->module()->serverHealth($server));
+    }
 }
