@@ -9,7 +9,8 @@ Everything the built-in **cPanel/WHM** server module does, plus:
 | **Admin service page** | **Log in to cPanel as `<username>`** and **Log in to WHM**, each recorded in the activity log |
 | **Live Servers page** | A **cPanel/WHM Pro servers** box with one-click **Log in to WHM** and live **server health** (load, disk, account count) per server |
 | **Client portal: 8 hosting tools** | File Manager, Email Accounts, Databases, FTP Accounts, Subdomains, DNS Zone, Cron Jobs, Backups (details below) |
-| **Client portal: 8 more tools** *(1.2)* | SSL / HTTPS, PHP Settings, Email Extras, Webmail, phpMyAdmin, Domains, Error Log, IP Blocker (details below) |
+| **Client portal: 9 more tools** *(1.2–1.3)* | SSL / HTTPS, PHP Settings, Email Extras, Webmail, phpMyAdmin, Domains, File Tools, Error Log, IP Blocker (details below) |
+| **Usage warnings** *(1.3)* | A daily check emails the client at **80%** and **95%** of their disk or monthly bandwidth, and fires the `HostingUsageWarning` hook, so [Flowsensy Notification](https://github.com/shiwang-biz/pnlcs-flowsensy-notification) 1.1+ can send it on WhatsApp too |
 | **Client's service page** *(1.2)* | The "Soon" tiles (apps, Laravel, Node.js, Python, which only Panelica servers have) are hidden, so clients see only tools that work |
 
 Create, suspend, unsuspend, terminate, change password, change package, usage sync, package list and the
@@ -92,12 +93,29 @@ Shown as extra tiles in the same tools grid (or as a "More tools" section if the
 | **Webmail** | Open any of the account's mailboxes in webmail, already signed in | WHM `create_user_session` (webmaild) |
 | **phpMyAdmin** | Opens straight into phpMyAdmin, already signed in | WHM `create_user_session` (app `Database_phpMyAdmin`) |
 | **Domains** | Add an addon domain (folder kept inside home), remove it (files kept), add/remove aliases (parked domains) | API2 `AddonDomain`, `Park` |
+| **File Tools** *(1.3)* | Extract archives (.zip, .tar.gz …) in place, compress selected files/folders into zip/tar.gz/tar.bz2/tar, set permissions (3 digits like 644/755) | API2 `Fileman::fileop` (extract, compress, chmod) |
 | **Error Log** | The latest website errors per domain, newest first | UAPI `Stats::get_site_errors` |
 | **IP Blocker** | Block an IP, a CIDR range (/16 or narrower) or an IPv4 range; unblock | API2 `DenyIp` |
 
 Same rules as the other tools: the client must own the service, it must not be terminated or cancelled, and a
 suspended service can be looked at but not changed. Everything sent from the browser is checked against the account's
 own domains, mailboxes, forwarders and block list.
+
+### Usage warnings (1.3)
+
+Runs every day at 09:17 through PNLCS's own scheduler (the cron you already have; nothing to set up). For each active
+cPanel/WHM Pro service it reads disk and bandwidth for the whole server in two WHM calls (`listaccts`, `showbw`) and,
+at 80% and again at 95%:
+
+- emails the client (subject like "Disk space 83% used: example.com"), and
+- fires the hook `HostingUsageWarning` with `service`, `client` and `usage` (`resource`, `percent`, `used`, `limit`, `level`).
+
+Each level is sent once: disk again only after usage drops below 80%, bandwidth once per level per month. Unlimited
+accounts are skipped. Run it by hand with `php artisan cpanelpro:usage-check`.
+
+**WhatsApp:** in Flowsensy Notification (1.1+), add a rule for **Hosting usage warning (disk / bandwidth)** and map
+the template's variables to `{client.first_name}`, `{usage.resource}`, `{usage.percent}`, `{usage.used}`, `{usage.limit}`,
+`{service.domain}` and so on.
 
 ## Files
 
@@ -106,8 +124,10 @@ CPanelPro/
 ├── pnlcs.json                    server module "cpanelpro" + service provider
 ├── CPanelProModule.php           extends the built-in CPanelModule: ssoLogin, liveUsage, operatorLogin, admin panel
 ├── CPanelTools.php               the 8 hosting tools (trait)
-├── CPanelExtras.php              SSL, PHP, email extras, domains, error log, IP blocker, phpMyAdmin, webmail (trait)
-├── ExtrasController.php          the client pages for those extras
+├── CPanelExtras.php              SSL, PHP, email extras, domains, file tools, error log, IP blocker, phpMyAdmin, webmail (trait)
+├── ExtrasController.php          the client pages for those extras (and File Tools)
+├── UsageAlerts.php               the daily 80% / 95% disk and bandwidth check
+├── UsageWarningMail.php          its email; UsageCheckCommand.php: `cpanelpro:usage-check`
 ├── CPanelProController.php       staff cPanel / WHM login links, server health
 ├── CPanelProServiceProvider.php  routes, views
 ├── hooks.php                     server form settings, Live Servers box, "cPanel/WHM Pro" label, hides "Soon" tiles

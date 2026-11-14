@@ -7,6 +7,7 @@
         ['route' => route('client.services.cpanelpro.webmail', $service), 'name' => 'Webmail', 'desc' => 'Open a mailbox in webmail, already signed in.', 'ic' => 'ri-inbox-2-line', 'c' => '#e11d48'],
         ['form' => route('client.services.cpanelpro.phpmyadmin', $service), 'name' => 'phpMyAdmin', 'desc' => 'Open your databases, already signed in.', 'ic' => 'ri-database-2-line', 'c' => '#0284c7'],
         ['route' => route('client.services.cpanelpro.domains', $service), 'name' => 'Domains', 'desc' => 'Addon domains and aliases on this account.', 'ic' => 'ri-global-line', 'c' => '#2563eb'],
+        ['route' => route('client.services.cpanelpro.files', $service), 'name' => 'File Tools', 'desc' => 'Unzip, zip and change permissions.', 'ic' => 'ri-file-zip-line', 'c' => '#ca8a04'],
         ['route' => route('client.services.cpanelpro.errors', $service), 'name' => 'Error Log', 'desc' => 'Your websites\' latest errors.', 'ic' => 'ri-bug-line', 'c' => '#ea580c'],
         ['route' => route('client.services.cpanelpro.ipblock', $service), 'name' => 'IP Blocker', 'desc' => 'Stop addresses from opening your sites.', 'ic' => 'ri-forbid-2-line', 'c' => '#475569'],
     ];

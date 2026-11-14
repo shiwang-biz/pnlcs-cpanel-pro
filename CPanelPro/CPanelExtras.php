@@ -478,4 +478,89 @@ trait CPanelExtras
 
         return $r['success'] ? $this->ok("{$ip} unblocked.") : $this->fail($r['message']);
     }
+
+    // ------------------------------------------------------------------
+    // File tools: extract, compress, permissions (all fenced to the home folder)
+    // ------------------------------------------------------------------
+
+    public const ARCHIVE_TYPES = ['zip', 'tar.gz', 'tar.bz2', 'tar'];
+
+    public static function isArchive(string $name): bool
+    {
+        return (bool) preg_match('/\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2?|gz|bz2)$/i', $name);
+    }
+
+    public function extractArchive(Service $service, string $archive, ?string $dest = null): array
+    {
+        $src = $this->safePath($service, $archive);
+        $to = $this->safePath($service, $dest !== null && trim($dest) !== '' ? $dest : ($src ? dirname($src) : null));
+        if (! ($acc = $this->cpAccount($service)) || $src === null || $to === null || ! self::isArchive(basename($src)) || str_contains($src.$to, ',')) {
+            return $this->fail('Choose an archive (.zip, .tar.gz …) and a folder inside your home folder.');
+        }
+        $r = $this->api2($acc[0], $acc[1], 'Fileman', 'fileop', ['op' => 'extract', 'sourcefiles' => $src, 'destfiles' => $to, 'doubledecode' => 0]);
+
+        return $r['success'] ? $this->ok(basename($src).' extracted to '.$this->displayPath($service, $to).'.') : $this->fail($r['message'] ?: 'Could not extract that archive.');
+    }
+
+    public function compressEntries(Service $service, array $paths, string $archiveName, string $type = 'zip'): array
+    {
+        if (! in_array($type, self::ARCHIVE_TYPES, true)) {
+            return $this->fail('Choose zip, tar.gz, tar.bz2 or tar.');
+        }
+        $archiveName = preg_replace('/\.(zip|tar\.gz|tar\.bz2|tar)$/i', '', trim($archiveName));
+        if (! ($acc = $this->cpAccount($service)) || ! self::validName($archiveName.'.'.$type)) {
+            return $this->fail('Enter a valid archive name.');
+        }
+        $abs = [];
+        foreach ($paths as $p) {
+            $a = $this->safePath($service, (string) $p);
+            if ($a === null || $a === $this->home($service) || str_contains($a, ',')) {
+                return $this->fail('One of those items is outside your home folder.');
+            }
+            $abs[] = $a;
+        }
+        if (! $abs) {
+            return $this->fail('Select the files or folders to compress.');
+        }
+        $dest = dirname($abs[0]).'/'.$archiveName.'.'.$type;
+        $r = $this->api2($acc[0], $acc[1], 'Fileman', 'fileop', ['op' => 'compress', 'sourcefiles' => implode(',', $abs), 'destfiles' => $dest, 'metadata' => $type, 'doubledecode' => 0]);
+
+        return $r['success'] ? $this->ok('Created '.basename($dest).'.') : $this->fail($r['message'] ?: 'Could not create the archive.');
+    }
+
+    /** $mode: three octal digits like 644 or 755 (no setuid/setgid/sticky). */
+    public function chmodEntries(Service $service, array $paths, string $mode): array
+    {
+        $mode = ltrim(trim($mode), '0') === '' ? '000' : trim($mode);
+        if (strlen($mode) === 4 && $mode[0] === '0') {
+            $mode = substr($mode, 1);
+        }
+        if (! preg_match('/^[0-7]{3}$/', $mode)) {
+            return $this->fail('Permissions must be three digits like 644 (files) or 755 (folders).');
+        }
+        if (! $acc = $this->cpAccount($service)) {
+            return $this->fail('No cPanel account on this service.');
+        }
+        $abs = [];
+        foreach ($paths as $p) {
+            $a = $this->safePath($service, (string) $p);
+            if ($a === null || $a === $this->home($service) || str_contains($a, ',')) {
+                return $this->fail('One of those items is outside your home folder.');
+            }
+            $abs[] = $a;
+        }
+        if (! $abs) {
+            return $this->fail('Select the files or folders to change.');
+        }
+        $r = $this->api2($acc[0], $acc[1], 'Fileman', 'fileop', ['op' => 'chmod', 'sourcefiles' => implode(',', $abs), 'metadata' => '0'.$mode, 'doubledecode' => 0]);
+
+        return $r['success'] ? $this->ok('Permissions set to '.$mode.(count($abs) > 1 ? ' on '.count($abs).' items.' : '.')) : $this->fail($r['message'] ?: 'Could not change the permissions.');
+    }
+
+    private function displayPath(Service $service, string $abs): string
+    {
+        $rel = ltrim(substr($abs, strlen($this->home($service))), '/');
+
+        return $rel === '' ? 'your home folder' : $rel;
+    }
 }

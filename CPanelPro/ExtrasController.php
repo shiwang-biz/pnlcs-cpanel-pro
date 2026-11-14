@@ -235,4 +235,30 @@ class ExtrasController extends Controller
     {
         return $this->done($this->context($service, true)->unblockIp($service, (string) $request->input('ip')));
     }
+
+    // ---------- File tools ----------
+
+    public function files(Request $request, Service $service)
+    {
+        return $this->page('files', $service, ['list' => $this->context($service)->listFiles($service, $request->query('path'))]);
+    }
+
+    public function extract(Request $request, Service $service)
+    {
+        return $this->done($this->context($service, true)->extractArchive($service, (string) $request->input('archive'), $request->input('dest')));
+    }
+
+    public function compress(Request $request, Service $service)
+    {
+        $d = $request->validate(['paths' => ['required', 'array', 'max:200'], 'paths.*' => ['string', 'max:1024'], 'name' => ['required', 'string', 'max:200'], 'type' => ['required', 'in:'.implode(',', CPanelProModule::ARCHIVE_TYPES)]]);
+
+        return $this->done($this->context($service, true)->compressEntries($service, $d['paths'], $d['name'], $d['type']));
+    }
+
+    public function chmod(Request $request, Service $service)
+    {
+        $d = $request->validate(['paths' => ['required', 'array', 'max:200'], 'paths.*' => ['string', 'max:1024'], 'mode' => ['required', 'string', 'max:4']]);
+
+        return $this->done($this->context($service, true)->chmodEntries($service, $d['paths'], $d['mode']));
+    }
 }

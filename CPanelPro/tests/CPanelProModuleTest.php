@@ -669,3 +669,85 @@ test('Live Servers: health endpoint for staff with server access', function () {
 
     $this->actingAs(cpAdmin(false), 'admin')->getJson(route('cpanelpro.admin.health', $server))->assertForbidden();
 });
+
+// ---------------------------------------------------------------------------
+// 1.3: file tools, usage warnings
+// ---------------------------------------------------------------------------
+
+test('file tools: browse, extract, compress and set permissions, all inside home', function () {
+    cpFakeAll();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+    $r = route('client.services.cpanelpro.files.extract', $service);
+
+    $as->get(route('client.services.cpanelpro.files', $service))->assertOk()
+        ->assertSee('backup-11.14.2026_10-00-00_asha123.tar.gz')->assertSee('Extract here');
+
+    $as->post($r, ['archive' => '/home/asha123/site.zip'])->assertSessionHas('success');
+    $as->post($r, ['archive' => '/home/other/site.zip'])->assertSessionHas('error');
+    $as->post($r, ['archive' => '/home/asha123/site.zip', 'dest' => '../../etc'])->assertSessionHas('error');
+    $as->post($r, ['archive' => '/home/asha123/notes.txt'])->assertSessionHas('error');
+
+    $c = route('client.services.cpanelpro.files.compress', $service);
+    $as->post($c, ['paths' => ['/home/asha123/public_html', '/home/asha123/notes.txt'], 'name' => 'site', 'type' => 'zip'])->assertSessionHas('success');
+    $as->post($c, ['paths' => ['/etc/passwd'], 'name' => 'x', 'type' => 'zip'])->assertSessionHas('error');
+    $as->post($c, ['paths' => ['/home/asha123/notes.txt'], 'name' => 'x', 'type' => 'rar'])->assertSessionHasErrors('type');
+
+    $m = route('client.services.cpanelpro.files.chmod', $service);
+    $as->post($m, ['paths' => ['/home/asha123/public_html'], 'mode' => '755'])->assertSessionHas('success');
+    $as->post($m, ['paths' => ['/home/asha123/notes.txt'], 'mode' => '4755'])->assertSessionHas('error');
+    $as->post($m, ['paths' => ['/home/asha123/notes.txt'], 'mode' => '999'])->assertSessionHas('error');
+    $as->post($m, ['paths' => ['/home/asha123'], 'mode' => '755'])->assertSessionHas('error');
+
+    $ops = collect(cpSent('Fileman', 'fileop'))->keyBy('op');
+    expect(collect(cpSent('Fileman', 'fileop'))->pluck('op')->all())->toBe(['extract', 'compress', 'chmod'])
+        ->and($ops['extract'])->toMatchArray(['sourcefiles' => '/home/asha123/site.zip', 'destfiles' => '/home/asha123'])
+        ->and($ops['compress'])->toMatchArray(['sourcefiles' => '/home/asha123/public_html,/home/asha123/notes.txt', 'destfiles' => '/home/asha123/site.zip', 'metadata' => 'zip'])
+        ->and($ops['chmod'])->toMatchArray(['sourcefiles' => '/home/asha123/public_html', 'metadata' => '0755']);
+});
+
+test('usage warnings: 80% and 95% once each, by email and the HostingUsageWarning hook', function () {
+    \Illuminate\Support\Facades\Mail::fake();
+    \Illuminate\Support\Facades\Storage::fake('local');
+    $disk = '8300M';
+    Http::fake(function ($r) use (&$disk) {
+        return match (true) {
+            str_ends_with($r->url(), 'listaccts') => Http::response(['metadata' => ['result' => 1], 'data' => ['acct' => [
+                ['user' => 'asha123', 'diskused' => $disk, 'disklimit' => '10000M'],
+                ['user' => 'unlim1', 'diskused' => '99999M', 'disklimit' => 'unlimited'],
+            ]]]),
+            str_ends_with($r->url(), 'showbw') => Http::response(['metadata' => ['result' => 1], 'data' => ['acct' => [
+                ['user' => 'asha123', 'totalbytes' => 50 * 1048576, 'limit' => 1000 * 1048576],
+            ]]]),
+            default => Http::response(['metadata' => ['result' => 1], 'data' => []]),
+        };
+    });
+    $seen = [];
+    add_hook('HostingUsageWarning', 1, function (array $vars) use (&$seen) {
+        $seen[] = $vars['usage'] + ['svc' => $vars['service']->id];
+    });
+    $server = cpServer();
+    [, $service] = cpService($server);
+    cpService($server, ['username' => 'unlim1']);
+    $alerts = app(\Modules\Servers\CPanelPro\UsageAlerts::class);
+
+    expect($alerts->run())->toBe(1)                     // 83%: the 80% warning
+        ->and($alerts->run())->toBe(0);                 // not again
+    $disk = '9600M';
+    expect($alerts->run())->toBe(1);                    // 96%: the 95% warning
+    $disk = '5000M';
+    expect($alerts->run())->toBe(0);                    // back under 80%: reset
+    $disk = '8100M';
+    expect($alerts->run())->toBe(1);                    // so 80% warns again
+
+    expect($seen)->toHaveCount(3)
+        ->and($seen[0])->toMatchArray(['resource' => 'Disk space', 'percent' => 83, 'used' => '8.1 GB', 'limit' => '9.8 GB', 'level' => 80, 'svc' => $service->id])
+        ->and($seen[1]['level'])->toBe(95);
+    \Illuminate\Support\Facades\Mail::assertSent(\Modules\Servers\CPanelPro\UsageWarningMail::class, 3);
+    \Illuminate\Support\Facades\Mail::assertSent(\Modules\Servers\CPanelPro\UsageWarningMail::class, fn ($m) => $m->hasTo($service->client->email) && str_contains($m->envelope()->subject, 'Disk space 83% used'));
+});
+
+test('the usage check is scheduled daily', function () {
+    $events = collect(app(\Illuminate\Console\Scheduling\Schedule::class)->events())->map(fn ($e) => $e->command);
+    expect($events->contains(fn ($c) => str_contains((string) $c, 'cpanelpro:usage-check')))->toBeTrue();
+})->skip(fn () => ! app()->runningInConsole(), 'console only');

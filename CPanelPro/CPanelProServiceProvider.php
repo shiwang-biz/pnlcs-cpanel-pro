@@ -11,6 +11,18 @@ class CPanelProServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__.'/views', 'cpanelpro');
 
+        if ($this->app->runningInConsole()) {
+            $this->commands([UsageCheckCommand::class]);
+            // Into PNLCS's own scheduler (the existing cron), nothing to set up.
+            $this->app->booted(function () {
+                try {
+                    $this->app->make(\Illuminate\Console\Scheduling\Schedule::class)
+                        ->command('cpanelpro:usage-check')->dailyAt('09:17')->withoutOverlapping(120);
+                } catch (\Throwable) {
+                }
+            });
+        }
+
         Route::middleware(['web', 'admin.auth', 'admin.2fa'])
             ->prefix('admin/cpanelpro')->name('cpanelpro.admin.')
             ->group(function () {
@@ -54,6 +66,10 @@ class CPanelProServiceProvider extends ServiceProvider
                 Route::get('ip-blocker', [$c, 'ipBlock'])->name('ipblock');
                 Route::post('ip-blocker', [$c, 'addIp'])->name('ipblock.store');
                 Route::post('ip-blocker/delete', [$c, 'deleteIp'])->name('ipblock.destroy');
+                Route::get('file-tools', [$c, 'files'])->name('files');
+                Route::post('file-tools/extract', [$c, 'extract'])->name('files.extract');
+                Route::post('file-tools/compress', [$c, 'compress'])->name('files.compress');
+                Route::post('file-tools/permissions', [$c, 'chmod'])->name('files.chmod');
             });
     }
 }

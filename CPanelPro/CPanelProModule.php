@@ -40,7 +40,7 @@ class CPanelProModule extends CPanelModule
     // WHM API (the parent keeps its helpers private, so a copy lives here)
     // ------------------------------------------------------------------
 
-    protected function whm(Server $server, string $function, array $params = [], int $timeout = 20): array
+    public function whm(Server $server, string $function, array $params = [], int $timeout = 20): array
     {
         $params['api.version'] = 1;
         $port = $server->port ?: 2087;
