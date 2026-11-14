@@ -30,6 +30,7 @@ class CPanelProModule extends CPanelModule
 {
     use CPanelTools;
     use CPanelExtras;
+    use WpToolkit;
 
     public function getModuleName(): string
     {

@@ -198,7 +198,7 @@ test('admin pages relabel the type as cPanel/WHM Pro', function () {
 // ======================================================================
 
 /** A WHM that answers UAPI (uapi_cpanel), API2 (cpanel) and a cPanel session, like the real one. */
-function cpFakeAll(): void
+function cpFakeAll(?callable $extra = null): void
 {
     $uapi = function (string $mod, string $fn, array $p) {
         $data = match ("{$mod}::{$fn}") {
@@ -251,7 +251,10 @@ function cpFakeAll(): void
         return ['cpanelresult' => ['event' => ['result' => 1], 'data' => $data, 'error' => null]];
     };
 
-    Http::fake(function ($r) use ($uapi, $api2) {
+    Http::fake(function ($r) use ($uapi, $api2, $extra) {
+        if ($extra && ($res = $extra($r)) !== null) {
+            return $res;
+        }
         $url = $r->url();
         if (str_ends_with($url, '/json-api/uapi_cpanel')) {
             return Http::response($uapi($r['cpanel.module'], $r['cpanel.function'], $r->data()));
@@ -751,3 +754,226 @@ test('the usage check is scheduled daily', function () {
     $events = collect(app(\Illuminate\Console\Scheduling\Schedule::class)->events())->map(fn ($e) => $e->command);
     expect($events->contains(fn ($c) => str_contains((string) $c, 'cpanelpro:usage-check')))->toBeTrue();
 })->skip(fn () => ! app()->runningInConsole(), 'console only');
+
+// ---------------------------------------------------------------------------
+// 1.4: WordPress (WP Toolkit)
+// ---------------------------------------------------------------------------
+
+const WPT = 'https://whm.example.test:2083/cpsess4242/3rdparty/wpt/index.php';
+
+function cpWpSite(int $id, string $user, string $path): array
+{
+    return ['id' => $id, 'title' => "Site {$id}", 'displayTitle' => "Site {$id}", 'url' => "https://site{$id}.test", 'version' => '6.8.1', 'path' => $path,
+        'owner' => ['id' => 1, 'login' => $user, 'name' => $user, 'url' => ''], 'screenshot' => ['url' => '', 'createdAt' => ''], 'errorMessage' => '',
+        'domain' => ['name' => 'asha.example.com', 'ssl' => ['certificate' => ['installed' => true, 'selfSigned' => false]]],
+        'status' => ['alive' => true, 'infected' => false],
+        'features' => ['maintenance' => ['status' => false], 'indexing' => ['status' => true], 'debug' => ['status' => false],
+            'hotlinkProtection' => ['available' => true, 'status' => false], 'updates' => ['amountOfPluginsWithUpdates' => 1, 'amountOfThemesWithUpdates' => 0, 'availableVersion' => '6.8.2', 'smart' => ['available' => true, 'status' => false]],
+            'security' => ['status' => 'insecure'], 'vulnerability' => ['vulnerable' => false], 'virtualPatches' => ['available' => true, 'status' => false],
+            'php' => ['handler' => ['name' => 'PHP 8.2']]]];
+}
+
+/** WP Toolkit's REST API as cPanel serves it to the client's session. */
+function cpFakeWp(): void
+{
+    cpFakeAll(function ($r) {
+        $url = $r->url();
+        if (! str_starts_with($url, WPT)) {
+            return null;
+        }
+        $path = parse_url(substr($url, strlen(WPT)), PHP_URL_PATH);
+        $m = $r->method();
+        $task = ['url' => '', 'task' => ['id' => 55, 'code' => 'x', 'title' => 'Working', 'status' => 'started', 'progress' => 10, 'steps' => [], 'publicParams' => [], 'errors' => [], 'hidden' => false]];
+
+        return match (true) {
+            $m === 'GET' && $path === '/v1/installations' => Http::response([cpWpSite(7, 'asha123', '/home/asha123/public_html'), cpWpSite(9, 'other', '/home/other/public_html')]),
+            $m === 'GET' && $path === '/v1/installations/7' => Http::response(cpWpSite(7, 'asha123', '/home/asha123/public_html')),
+            $m === 'POST' && $path === '/v1/installations' => Http::response($task, 201),
+            $m === 'POST' && $path === '/v1/installations/7/login' => Http::response(['link' => 'https://site7.test/wp-login.php?wpt=onetime'], 307, ['Location' => 'https://site7.test/wp-login.php?wpt=onetime']),
+            $m === 'GET' && $path === '/v1/installations/7/background-tasks' => Http::response([$task['task'] + ['hidden' => false]]),
+            $m === 'GET' && $path === '/v1/installations/7/plugins' => Http::response([
+                ['slug' => 'akismet', 'title' => 'Akismet', 'description' => 'Spam', 'version' => '5.0', 'availableVersion' => '5.1', 'status' => true, 'mustUse' => false, 'autoUpdates' => false, 'autoUpdatesAvailable' => true, 'vulnerable' => false],
+                ['slug' => 'hello-dolly', 'title' => 'Hello Dolly', 'description' => 'Lyrics', 'version' => '1.7', 'availableVersion' => '', 'status' => false, 'mustUse' => false, 'autoUpdates' => false, 'autoUpdatesAvailable' => true, 'vulnerable' => true],
+            ]),
+            $m === 'GET' && $path === '/v1/installations/7/themes' => Http::response([
+                ['slug' => 'twentytwentyfive', 'title' => 'Twenty Twenty-Five', 'description' => '', 'version' => '1.0', 'availableVersion' => '', 'status' => true, 'autoUpdates' => true, 'autoUpdatesAvailable' => true, 'vulnerable' => false],
+                ['slug' => 'astra', 'title' => 'Astra', 'description' => '', 'version' => '4.0', 'availableVersion' => '', 'status' => false, 'autoUpdates' => false, 'autoUpdatesAvailable' => true, 'vulnerable' => false],
+            ]),
+            $m === 'GET' && str_starts_with($path, '/v1/installations/7/features/catalog/') => Http::response(['total' => 1, 'items' => [
+                ['slug' => 'contact-form-7', 'title' => 'Contact Form 7', 'author' => ['name' => 'Takayuki'], 'version' => '6.0', 'shortDescription' => 'Forms', 'rating' => ['score' => 80], 'downloaded' => 1000, 'installed' => false, 'logoUrl' => '', 'screenshotUrl' => ''],
+            ]]),
+            $m === 'POST' && $path === '/v1/installations/7/plugins' => Http::response(['slug' => $r['slug'], 'title' => 'Contact Form 7', 'status' => true]),
+            str_starts_with($path, '/v1/installations/7/plugins/') || str_starts_with($path, '/v1/installations/7/themes/') => Http::response(['status' => $r['status']]),
+            in_array($m, ['PATCH', 'DELETE'], true) && in_array($path, ['/v1/installations/7/plugins', '/v1/installations/7/themes'], true) => Http::response([]),
+            $m === 'GET' && $path === '/v1/updates-checker' => Http::response([['id' => 7, 'lastCheckUpdateTimestamp' => time() - 60, 'core' => ['version' => '6.8.1', 'availableVersion' => '6.8.2'],
+                'plugins' => [['slug' => 'akismet', 'title' => 'Akismet', 'version' => '5.0', 'availableVersion' => '5.1']], 'themes' => []]]),
+            $m === 'GET' && $path === '/v1/installations/7/features/updates/settings' => Http::response(['available' => true, 'safeUpdate' => false, 'core' => 'minor', 'plugins' => ['forceUpdates' => false, 'newlyInstalledUpdates' => false, 'updateVulnerable' => true, 'deactivateVulnerable' => false], 'themes' => ['forceUpdates' => false, 'newlyInstalledUpdates' => false, 'updateVulnerable' => true]]),
+            $m === 'GET' && $path === '/v1/security-measures' => Http::response([['id' => 'wp_config_permissions', 'title' => 'Restrict wp-config.php', 'description' => 'Permissions', 'rollbackAvailable' => true, 'critical' => true], ['id' => 'xmlrpc', 'title' => 'Block XML-RPC', 'description' => 'Off', 'rollbackAvailable' => true, 'critical' => false]]),
+            $m === 'GET' && $path === '/v1/security-measures/checker' => Http::response([['id' => 7, 'securityStatus' => 'insecure', 'securityMeasures' => [['id' => 'wp_config_permissions', 'status' => false, 'available' => true], ['id' => 'xmlrpc', 'status' => true, 'available' => true]]]]),
+            $m === 'GET' && $path === '/v1/vulnerabilities-checker' => Http::response([['id' => 7, 'lastVulnerabilityCheckTimestamp' => time(), 'core' => ['vulnerabilities' => []],
+                'plugins' => [['slug' => 'hello-dolly', 'title' => 'Hello Dolly', 'vulnerabilities' => [['title' => 'XSS in Hello Dolly', 'riskRank' => 'high', 'fixedIn' => '', 'exploited' => false, 'directUrl' => '']]]], 'themes' => []]]),
+            $m === 'GET' && $path === '/v1/installations/7/backups' => Http::response([['fileName' => 'site7__2026-11-14.zip', 'fileSize' => 10485760, 'createdAt' => '2026-11-14T10:00:00+05:30', 'absoluteFilePath' => '/home/asha123/wordpress-backups/site7__2026-11-14.zip']]),
+            $m === 'GET' && $path === '/v1/installations/7/features/clone/stub' => Http::response(['value' => ['database' => ['value' => ['name' => ['value' => 'asha123_wp_clone']]], 'domain' => ['value' => ['newSubdomain' => ['value' => ['name' => ['value' => 'staging'], 'parentDomain' => ['value' => 'asha.example.com']]]]]]]),
+            $m === 'GET' && $path === '/v1/installations/7/account' => Http::response(['loginUrl' => '', 'currentLogin' => 'admin', 'currentPassword' => 'SECRET-PASS', 'currentEmail' => 'a@asha.example.com', 'currentLanguage' => 'en_US', 'availableLogins' => [['login' => 'admin', 'title' => 'admin']], 'availableLanguages' => [['code' => 'en_US', 'title' => 'English']]]),
+            $m === 'GET' && $path === '/v1/installations/7/features/password-protection' => Http::response(['available' => true, 'status' => false, 'credentials' => ['username' => '', 'password' => '']]),
+            $m === 'GET' && $path === '/v1/sets' => Http::response([['id' => 3, 'title' => 'Starter', 'plugins' => [], 'themes' => []]]),
+            $m === 'DELETE' && $path === '/v1/installations/7/backups' => Http::response([]),
+            $m === 'PUT' => Http::response(['status' => $r['status'] ?? true]),
+            $m === 'PATCH' => Http::response(['available' => true, 'status' => true]),
+            $m === 'POST' => Http::response($task, 201),
+            default => Http::response(['meta' => ['status' => 404, 'message' => 'Not found']], 404),
+        };
+    });
+}
+
+function cpWpSent(string $method, string $path): array
+{
+    return collect(Http::recorded())->map(fn ($p) => $p[0])
+        ->filter(fn ($r) => $r->method() === $method && parse_url(str_replace(WPT, '', $r->url()), PHP_URL_PATH) === $path && str_starts_with($r->url(), WPT))
+        ->values()->all();
+}
+
+test('WordPress: sites list shows only own sites; pages for every tab open', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->get(route('client.services.cpanelpro.wp', $service))->assertOk()
+        ->assertSee('Site 7')->assertDontSee('Site 9')->assertSee('2 updates')->assertSee('Starter');
+    foreach (['overview' => 'Maintenance mode', 'plugins' => 'Hello Dolly', 'themes' => 'Astra', 'updates' => '6.8.2', 'security' => 'XSS in Hello Dolly', 'backups' => 'site7__2026-11-14.zip', 'clone' => 'asha123_wp_clone', 'settings' => 'a@asha.example.com'] as $tab => $see) {
+        $as->get(route('client.services.cpanelpro.wp.show', [$service, 7, 'tab' => $tab]))->assertOk()->assertSee($see);
+    }
+    $as->get(route('client.services.cpanelpro.wp.show', [$service, 7, 'tab' => 'settings']))->assertDontSee('SECRET-PASS');
+    $as->get(route('client.services.cpanelpro.wp.show', [$service, 7, 'tab' => 'plugins', 'q' => 'contact']))->assertOk()->assertSee('Contact Form 7');
+    $as->get(route('client.services.cpanelpro.wp.show', [$service, 9]))->assertNotFound();
+    expect($as->getJson(route('client.services.cpanelpro.wp.tasks', [$service, 7]))->assertOk()->json('0.status'))->toBe('started');
+
+    // Every WP Toolkit call went through this client's own cPanel session.
+    Http::assertSent(fn ($r) => str_ends_with($r->url(), 'create_user_session') && $r['user'] === 'asha123' && $r['service'] === 'cpaneld');
+    Http::assertNotSent(fn ($r) => str_ends_with($r->url(), 'create_user_session') && $r['user'] !== 'asha123');
+});
+
+test('WordPress: install on own domain only; one-click wp-admin login', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->post(route('client.services.cpanelpro.wp.install', $service), ['domain' => 'asha.example.com', 'path' => 'blog', 'title' => 'My blog', 'core_updates' => 'minor', 'set' => 3])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.install', $service), ['domain' => 'victim.com'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.wp.install', $service), ['domain' => 'asha.example.com', 'path' => '../../etc'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.wp.install', $service), ['domain' => 'asha.example.com', 'set' => 99])->assertSessionHas('error');
+
+    $sent = cpWpSent('POST', '/v1/installations');
+    expect($sent)->toHaveCount(1)->and($sent[0]->data())->toMatchArray(['domain' => 'asha.example.com', 'installationPath' => 'blog', 'title' => 'My blog', 'set' => 3, 'autoUpdate' => ['core' => 'minor']]);
+
+    $as->post(route('client.services.cpanelpro.wp.login', [$service, 7]))->assertRedirect('https://site7.test/wp-login.php?wpt=onetime');
+    $as->post(route('client.services.cpanelpro.wp.login', [$service, 9]))->assertNotFound();
+    expect(cpWpSent('POST', '/v1/installations/9/login'))->toBeEmpty();
+});
+
+test('WordPress: switches, password protection, cache, sets, admin account', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+    $t = route('client.services.cpanelpro.wp.toggle', [$service, 7]);
+
+    $as->post($t, ['feature' => 'maintenance', 'state' => '1'])->assertSessionHas('success');
+    $as->post($t, ['feature' => 'virtualpatch', 'state' => '1'])->assertSessionHas('success');
+    $as->post($t, ['feature' => 'rm-rf', 'state' => '1'])->assertSessionHasErrors('feature');
+    $as->post(route('client.services.cpanelpro.wp.protection', [$service, 7]), ['state' => '1', 'username' => 'guest', 'password' => 'short'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.wp.protection', [$service, 7]), ['state' => '1', 'username' => 'guest', 'password' => 'long-enough-1'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.cache', [$service, 7]))->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.set', [$service, 7]), ['set' => 3])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.set', [$service, 7]), ['set' => 4])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.wp.account', [$service, 7]), ['email' => 'new@asha.example.com', 'password' => 'NewPass123'])->assertSessionHas('success');
+
+    expect(cpWpSent('PUT', '/v1/installations/7/features/maintenance/status')[0]['status'])->toBeTrue()
+        ->and(cpWpSent('POST', '/v1/features/virtual-patches/protector')[0]->data())->toBe(['installationsIds' => [7], 'status' => true])
+        ->and(cpWpSent('PATCH', '/v1/installations/7/features/password-protection')[0]->data())->toBe(['status' => true, 'credentials' => ['username' => 'guest', 'password' => 'long-enough-1']])
+        ->and(cpWpSent('POST', '/v1/sets-installer')[0]->data())->toBe(['setId' => 3, 'installationId' => 7])
+        ->and(cpWpSent('PATCH', '/v1/installations/7/account')[0]->data())->toBe(['password' => 'NewPass123', 'email' => 'new@asha.example.com']);
+});
+
+test('WordPress: plugins and themes: install from the catalog, upload, activate, auto-update, delete', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+    $rt = fn ($n, $k) => route('client.services.cpanelpro.wp.asset.'.$n, [$service, 7, $k]);
+
+    $as->post($rt('install', 'plugins'), ['slug' => 'contact-form-7', 'activate' => '1'])->assertSessionHas('success');
+    $as->post($rt('install', 'plugins'), ['slug' => '../../evil'])->assertSessionHas('error');
+    $as->post($rt('upload', 'plugins'), ['file' => \Illuminate\Http\UploadedFile::fake()->create('premium.zip', 200, 'application/zip')])->assertSessionHas('success');
+    $as->post($rt('upload', 'themes'), ['file' => \Illuminate\Http\UploadedFile::fake()->create('shell.php', 2)])->assertSessionHasErrors('file');
+    $as->post($rt('status', 'plugins'), ['slug' => 'akismet', 'state' => '0'])->assertSessionHas('success');
+    $as->post($rt('status', 'plugins'), ['slug' => 'not-installed', 'state' => '1'])->assertSessionHas('error');
+    $as->post($rt('status', 'themes'), ['slug' => 'astra', 'state' => '1'])->assertSessionHas('success');
+    $as->post($rt('autoupdate', 'plugins'), ['slug' => 'akismet', 'state' => '1'])->assertSessionHas('success');
+    $as->post($rt('delete', 'plugins'), ['slugs' => ['hello-dolly']])->assertSessionHas('success');
+    $as->post($rt('delete', 'plugins'), ['slugs' => ['hello-dolly', 'someone-elses']])->assertSessionHas('error');
+    $as->post($rt('delete', 'themes'), ['slugs' => ['twentytwentyfive']])->assertSessionHas('error'); // the active theme
+
+    expect(cpWpSent('POST', '/v1/installations/7/plugins')[0]->data())->toBe(['slug' => 'contact-form-7', 'status' => true])
+        ->and(cpWpSent('POST', '/v1/installations/7/features/uploader/plugins'))->toHaveCount(1)
+        ->and(cpWpSent('PUT', '/v1/installations/7/plugins/akismet/status')[0]['status'])->toBeFalse()
+        ->and(cpWpSent('PUT', '/v1/installations/7/themes/astra/status')[0]['status'])->toBeTrue()
+        ->and(cpWpSent('PATCH', '/v1/installations/7/plugins')[0]->data())->toBe([['slug' => 'akismet', 'autoUpdates' => true]])
+        ->and(cpWpSent('DELETE', '/v1/installations/7/plugins'))->toHaveCount(1)
+        ->and(cpWpSent('DELETE', '/v1/installations/7/plugins')[0]->data())->toBe(['hello-dolly'])
+        ->and(cpWpSent('DELETE', '/v1/installations/7/themes'))->toBeEmpty();
+});
+
+test('WordPress: updates, security, backups and clone', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+
+    $as->post(route('client.services.cpanelpro.wp.updates.check', [$service, 7]))->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.updates.apply', [$service, 7]), ['core' => '1', 'plugins' => ['akismet', 'not-updatable']])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.updates.settings', [$service, 7]), ['core' => 'major', 'plugins_vulnerable' => '1', 'safe' => '0'])->assertSessionHas('success');
+
+    $s = route('client.services.cpanelpro.wp.security', [$service, 7]);
+    $as->post($s, ['action' => 'check'])->assertSessionHas('success');
+    $as->post($s, ['action' => 'apply', 'measures' => ['wp_config_permissions', 'made_up']])->assertSessionHas('success');
+    $as->post($s, ['action' => 'revert', 'measures' => ['made_up']])->assertSessionHas('error');
+    $as->post($s, ['action' => 'vulnerabilities'])->assertSessionHas('success');
+
+    $as->post(route('client.services.cpanelpro.wp.backups.create', [$service, 7]), ['note' => 'before redesign'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.backups.restore', [$service, 7]), ['file' => 'site7__2026-11-14.zip'])->assertSessionHas('success');
+    $as->post(route('client.services.cpanelpro.wp.backups.restore', [$service, 7]), ['file' => '../../other.zip'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.wp.backups.delete', [$service, 7]), ['files' => ['site7__2026-11-14.zip']])->assertSessionHas('success');
+
+    $c = route('client.services.cpanelpro.wp.clone', [$service, 7]);
+    $as->post($c, ['target' => 'sub', 'name' => 'staging', 'parent' => 'asha.example.com'])->assertSessionHas('success');
+    $as->post($c, ['target' => 'sub', 'name' => 'staging', 'parent' => 'victim.com'])->assertSessionHas('error');
+    $as->post($c, ['target' => 'existing', 'existing' => 'blog.asha.example.com', 'database' => 'asha123_copy'])->assertSessionHas('success');
+
+    expect(cpWpSent('POST', '/v1/updater')[0]->data())->toBe([['installationId' => 7, 'core' => ['update' => true, 'restorePoint' => true], 'plugins' => ['akismet'], 'themes' => []]])
+        ->and(cpWpSent('PUT', '/v1/installations/7/features/updates/settings')[0]->data())->toMatchArray(['core' => 'major', 'safeUpdate' => false])
+        ->and(cpWpSent('PUT', '/v1/installations/7/features/updates/settings')[0]['plugins']['updateVulnerable'])->toBeTrue()
+        ->and(cpWpSent('POST', '/v1/security-measures/resolver')[0]['securityMeasures'])->toBe(['wp_config_permissions'])
+        ->and(cpWpSent('POST', '/v1/security-measures/reverter'))->toBeEmpty()
+        ->and(cpWpSent('POST', '/v1/features/backups/restorer')[0]['fileName'])->toBe('site7__2026-11-14.zip')
+        ->and(cpWpSent('DELETE', '/v1/installations/7/backups')[0]->url())->toContain('files%5B%5D=site7__2026-11-14.zip')
+        ->and(cpWpSent('POST', '/v1/cloner'))->toHaveCount(2)
+        ->and(cpWpSent('POST', '/v1/cloner')[0]->data())->toMatchArray(['installationId' => 7, 'domain' => ['newSubdomain' => ['name' => 'staging', 'parentDomain' => 'asha.example.com']], 'database' => ['name' => 'asha123_wp_clone']])
+        ->and(cpWpSent('POST', '/v1/cloner')[1]['domain'])->toBe(['existing' => 'blog.asha.example.com']);
+});
+
+test('WordPress: strangers refused, suspended is read-only, missing WP Toolkit explained', function () {
+    cpFakeWp();
+    [, $service] = cpService();
+    $stranger = User::factory()->create();
+    $this->actingAs($stranger)->get(route('client.services.cpanelpro.wp', $service))->assertForbidden();
+    $this->actingAs($stranger)->post(route('client.services.cpanelpro.wp.login', [$service, 7]))->assertForbidden();
+
+    [$owner, $suspended] = cpService(null, ['status' => 'Suspended', 'username' => 'asha123']);
+    $this->actingAs($owner)->get(route('client.services.cpanelpro.wp', $suspended))->assertOk();
+    $this->actingAs($owner)->post(route('client.services.cpanelpro.wp.toggle', [$suspended, 7]), ['feature' => 'maintenance', 'state' => '1'])->assertSessionHas('error');
+    expect(cpWpSent('PUT', '/v1/installations/7/features/maintenance/status'))->toBeEmpty();
+});
+
+test('WordPress: a server without WP Toolkit says so', function () {
+    cpFakeAll(fn ($r) => str_contains($r->url(), '/3rdparty/wpt/') ? Http::response('<html>Not Found</html>', 404) : null);
+    [$u3, $s3] = cpService();
+    $this->actingAs($u3)->get(route('client.services.cpanelpro.wp', $s3))->assertOk()->assertSee('WP Toolkit is not available on this server.');
+});

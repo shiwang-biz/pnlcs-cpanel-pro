@@ -1,6 +1,7 @@
 {{-- cPanel/WHM Pro: extra tools, added to the service page's hosting-tools grid. --}}
 @php
     $tiles = [
+        ['route' => route('client.services.cpanelpro.wp', $service), 'name' => 'WordPress', 'desc' => 'Install and manage WordPress sites, plugins and themes.', 'ic' => 'ri-wordpress-line', 'c' => '#21759b'],
         ['route' => route('client.services.cpanelpro.ssl', $service), 'name' => 'SSL / HTTPS', 'desc' => 'Certificates, AutoSSL and the HTTPS redirect.', 'ic' => 'ri-shield-check-line', 'c' => '#16a34a'],
         ['route' => route('client.services.cpanelpro.php', $service), 'name' => 'PHP Settings', 'desc' => 'PHP version and limits for each domain.', 'ic' => 'ri-code-s-slash-line', 'c' => '#7c3aed'],
         ['route' => route('client.services.cpanelpro.email', $service), 'name' => 'Email Extras', 'desc' => 'Forwarders, autoresponders and catch-all.', 'ic' => 'ri-mail-send-line', 'c' => '#db2777'],

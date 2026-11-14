@@ -70,6 +70,35 @@ class CPanelProServiceProvider extends ServiceProvider
                 Route::post('file-tools/extract', [$c, 'extract'])->name('files.extract');
                 Route::post('file-tools/compress', [$c, 'compress'])->name('files.compress');
                 Route::post('file-tools/permissions', [$c, 'chmod'])->name('files.chmod');
+
+                // WordPress (cPanel WP Toolkit)
+                $w = WordPressController::class;
+                Route::get('wordpress', [$w, 'index'])->name('wp');
+                Route::post('wordpress/install', [$w, 'install'])->name('wp.install');
+                Route::post('wordpress/scan', [$w, 'scan'])->name('wp.scan');
+                Route::prefix('wordpress/{site}')->whereNumber('site')->name('wp.')->group(function () use ($w) {
+                    Route::get('/', [$w, 'show'])->name('show');
+                    Route::get('tasks', [$w, 'tasks'])->name('tasks');
+                    Route::post('login', [$w, 'login'])->name('login');
+                    Route::post('toggle', [$w, 'toggle'])->name('toggle');
+                    Route::post('password-protection', [$w, 'passwordProtection'])->name('protection');
+                    Route::post('cache', [$w, 'clearCache'])->name('cache');
+                    Route::post('account', [$w, 'account'])->name('account');
+                    Route::post('set', [$w, 'installSet'])->name('set');
+                    Route::post('{kind}/install', [$w, 'assetInstall'])->whereIn('kind', ['plugins', 'themes'])->name('asset.install');
+                    Route::post('{kind}/upload', [$w, 'assetUpload'])->whereIn('kind', ['plugins', 'themes'])->name('asset.upload');
+                    Route::post('{kind}/status', [$w, 'assetStatus'])->whereIn('kind', ['plugins', 'themes'])->name('asset.status');
+                    Route::post('{kind}/auto-update', [$w, 'assetAutoUpdate'])->whereIn('kind', ['plugins', 'themes'])->name('asset.autoupdate');
+                    Route::post('{kind}/delete', [$w, 'assetDelete'])->whereIn('kind', ['plugins', 'themes'])->name('asset.delete');
+                    Route::post('updates/check', [$w, 'checkUpdates'])->name('updates.check');
+                    Route::post('updates/apply', [$w, 'applyUpdates'])->name('updates.apply');
+                    Route::post('updates/settings', [$w, 'updateSettings'])->name('updates.settings');
+                    Route::post('security', [$w, 'security'])->name('security');
+                    Route::post('backups', [$w, 'backup'])->name('backups.create');
+                    Route::post('backups/restore', [$w, 'restore'])->name('backups.restore');
+                    Route::post('backups/delete', [$w, 'deleteBackups'])->name('backups.delete');
+                    Route::post('clone', [$w, 'cloneSite'])->name('clone');
+                });
             });
     }
 }
