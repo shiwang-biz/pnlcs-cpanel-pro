@@ -105,7 +105,7 @@ class WordPressController extends Controller
             'backups' => ['backups' => $m->wpBackups($service, $site)],
             'clone' => ['stub' => $m->wpCloneStub($service, $site), 'domains' => $m->accountDomains($service),
                 'subdomains' => array_column($m->subdomains($service), 'full_name')],
-            'settings' => ['account' => $m->wpAccount($service, $site)],
+            'settings' => ['account' => $m->wpAccount($service, $site), 'plan' => $m->wpRemovalPlan($service, $site)],
         };
 
         return view('cpanelpro::client.wordpress.site', $data);
@@ -271,5 +271,17 @@ class WordPressController extends Controller
         ]);
 
         return $this->done($this->site($service, $site, true)->wpClone($service, $site, $d));
+    }
+
+    // ---------- Remove ----------
+
+    public function remove(Request $request, Service $service, int $site)
+    {
+        $d = $request->validate(['confirm' => ['required', 'string', 'max:300'], 'database' => ['nullable', 'in:0,1']]);
+        $r = $this->site($service, $site, true)->wpRemoveSite($service, $site, $d['confirm'], ($d['database'] ?? '1') === '1');
+
+        return $r['success']
+            ? redirect()->route('client.services.cpanelpro.wp', $service)->with('success', $r['message'])
+            : back()->with('error', $r['message']);
     }
 }

@@ -210,7 +210,10 @@ function cpFakeAll(?callable $extra = null): void
             'Mysql::get_restrictions' => ['prefix' => 'asha123_', 'max_database_name_length' => 64],
             'Ftp::list_ftp_with_disk' => [['login' => 'asha123', 'type' => 'main'], ['login' => 'dev@asha.example.com', 'type' => 'sub', 'dir' => '/home/asha123/public_html/dev', 'diskused' => '3', 'diskquota' => 'unlimited']],
             'StatsBar::get_stats' => [['name' => 'ftpaccounts', '_count' => 1, '_max' => 10], ['name' => 'subdomains', '_count' => 1, '_max' => 'unlimited'], ['name' => 'emailaccounts', '_count' => 1, '_max' => 'unlimited']],
-            'Fileman::list_files' => [
+            'Fileman::list_files' => str_ends_with((string) ($p['dir'] ?? ''), '/public_html') ? array_map(fn ($f) => ['file' => $f[0], 'type' => $f[1], 'size' => 1, 'mtime' => 1763100000, 'nicemode' => '0644'], [
+                ['wp-admin', 'dir'], ['wp-content', 'dir'], ['wp-includes', 'dir'], ['index.php', 'file'], ['wp-config.php', 'file'],
+                ['wp-login.php', 'file'], ['xmlrpc.php', 'file'], ['.htaccess', 'file'], ['shop', 'dir'], ['my-notes.php', 'file'],
+            ]) : [
                 ['file' => 'public_html', 'type' => 'dir', 'mtime' => 1763100000, 'nicemode' => '0750'],
                 ['file' => 'notes.txt', 'type' => 'file', 'size' => 12, 'humansize' => '12 bytes', 'mtime' => 1763100000, 'nicemode' => '0644'],
                 ['file' => 'backup-11.14.2026_10-00-00_asha123.tar.gz', 'type' => 'file', 'size' => 52428800, 'mtime' => 1763114400, 'nicemode' => '0600'],
@@ -818,6 +821,9 @@ function cpFakeWp(): void
             $m === 'GET' && $path === '/v1/installations/7/features/password-protection' => Http::response(['available' => true, 'status' => false, 'credentials' => ['username' => '', 'password' => '']]),
             $m === 'GET' && $path === '/v1/sets' => Http::response([['id' => 3, 'title' => 'Starter', 'plugins' => [], 'themes' => []]]),
             $m === 'DELETE' && $path === '/v1/installations/7/backups' => Http::response([]),
+            $m === 'GET' && $path === '/v1/remover/confirmation' => Http::response([['id' => 7,
+                'database' => ['name' => 'asha123_wp7', 'sharedWithInstallationsIds' => [], 'removingAllowed' => true, 'willBeRemovedAutomatically' => true],
+                'user' => ['name' => 'asha123_wp7u', 'sharedWithInstallationsIds' => [], 'removingAllowed' => true, 'willBeRemovedAutomatically' => true]]]),
             $m === 'PUT' => Http::response(['status' => $r['status'] ?? true]),
             $m === 'PATCH' => Http::response(['available' => true, 'status' => true]),
             $m === 'POST' => Http::response($task, 201),
@@ -976,4 +982,41 @@ test('WordPress: a server without WP Toolkit says so', function () {
     cpFakeAll(fn ($r) => str_contains($r->url(), '/3rdparty/wpt/') ? Http::response('<html>Not Found</html>', 404) : null);
     [$u3, $s3] = cpService();
     $this->actingAs($u3)->get(route('client.services.cpanelpro.wp', $s3))->assertOk()->assertSee('WP Toolkit is not available on this server.');
+});
+
+test('WordPress: remove a site: only WordPress files to the trash, its own database, typed confirmation', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $as = $this->actingAs($user);
+    $rm = route('client.services.cpanelpro.wp.remove', [$service, 7]);
+
+    $as->get(route('client.services.cpanelpro.wp.show', [$service, 7, 'tab' => 'settings']))->assertOk()
+        ->assertSee('Remove this WordPress site')->assertSee('asha123_wp7')->assertSee('3 other item(s)');
+
+    $as->post($rm, ['confirm' => 'wrong.com'])->assertSessionHas('error');
+    $as->post(route('client.services.cpanelpro.wp.remove', [$service, 9]), ['confirm' => 'site9.test'])->assertNotFound();
+    expect(cpSent('Fileman', 'fileop'))->toBeEmpty();
+
+    $as->post($rm, ['confirm' => 'https://SITE7.test/'])->assertRedirect(route('client.services.cpanelpro.wp', $service))->assertSessionHas('success');
+
+    $trash = cpSent('Fileman', 'fileop');
+    $moved = explode(',', $trash[0]['sourcefiles']);
+    sort($moved);
+    expect($trash)->toHaveCount(1)->and($trash[0]['op'])->toBe('trash')
+        ->and($moved)->toBe(array_map(fn ($f) => '/home/asha123/public_html/'.$f, ['index.php', 'wp-admin', 'wp-config.php', 'wp-content', 'wp-includes', 'wp-login.php', 'xmlrpc.php']))
+        ->and(cpSent('Mysql', 'delete_database')[0]['name'])->toBe('asha123_wp7')
+        ->and(cpSent('Mysql', 'delete_user')[0]['name'])->toBe('asha123_wp7u')
+        ->and(cpWpSent('POST', '/v1/scanner')[0]->data())->toBe(['users' => ['asha123']]);
+});
+
+test('WordPress: remove keeps the database when asked, or when it is shared or not the account\'s own', function () {
+    cpFakeWp();
+    [$user, $service] = cpService();
+    $this->actingAs($user)->post(route('client.services.cpanelpro.wp.remove', [$service, 7]), ['confirm' => 'site7.test', 'database' => '0'])->assertSessionHas('success');
+    expect(cpSent('Mysql', 'delete_database'))->toBeEmpty()->and(cpSent('Mysql', 'delete_user'))->toBeEmpty();
+
+    expect(\Modules\Servers\CPanelPro\CPanelProModule::isWordPressFile('wp-cron.php'))->toBeTrue()
+        ->and(\Modules\Servers\CPanelPro\CPanelProModule::isWordPressFile('.htaccess'))->toBeFalse()
+        ->and(\Modules\Servers\CPanelPro\CPanelProModule::isWordPressFile('shop'))->toBeFalse()
+        ->and(\Modules\Servers\CPanelPro\CPanelProModule::isWordPressFile('wp-content'))->toBeTrue();
 });

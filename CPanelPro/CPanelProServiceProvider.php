@@ -98,6 +98,7 @@ class CPanelProServiceProvider extends ServiceProvider
                     Route::post('backups/restore', [$w, 'restore'])->name('backups.restore');
                     Route::post('backups/delete', [$w, 'deleteBackups'])->name('backups.delete');
                     Route::post('clone', [$w, 'cloneSite'])->name('clone');
+                    Route::post('remove', [$w, 'remove'])->name('remove');
                 });
             });
     }

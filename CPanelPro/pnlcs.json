@@ -3,7 +3,7 @@
     "type": "server",
     "class": "Modules\\Servers\\CPanelPro\\CPanelProModule",
     "provider": "Modules\\Servers\\CPanelPro\\CPanelProServiceProvider",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "display_name": "cPanel/WHM Pro",
     "description": "Everything the built-in cPanel/WHM module does, plus WordPress management (WP Toolkit) and 17 client tools (File Manager, Email, Databases, FTP, Subdomains, DNS, Cron, Backups, SSL/HTTPS, PHP settings, Email extras, Webmail, phpMyAdmin, Domains, File tools, Error log, IP blocker), one-click cPanel login, live usage, staff cPanel/WHM logins, server health and 80%/95% disk and bandwidth warnings",
     "author": {

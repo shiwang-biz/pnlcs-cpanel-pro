@@ -702,4 +702,112 @@ trait WpToolkit
 
         return $this->wptTaskResult($this->wpt($service, 'post', '/v1/sets-installer', [], ['setId' => $setId, 'installationId' => $id]), 'Installing the set…');
     }
+
+    // ------------------------------------------------------------------
+    // Remove a site
+    //
+    // WP Toolkit's REST API has no removal call (only the root-only
+    // `wp-toolkit --remove` CLI), so this does it with cPanel's own APIs:
+    //  1. ask WP Toolkit which database / database user belong to the site,
+    //  2. move ONLY WordPress's own files in the site folder to the trash
+    //     (other sites or folders that live there are left alone),
+    //  3. delete the database and its user, unless another site shares them,
+    //  4. rescan, so WP Toolkit forgets the site.
+    // ------------------------------------------------------------------
+
+    /** WordPress's own top-level files and folders. */
+    public static function isWordPressFile(string $name): bool
+    {
+        return in_array($name, ['wp-admin', 'wp-includes', 'wp-content', 'index.php', 'xmlrpc.php', 'license.txt', 'readme.html'], true)
+            || (bool) preg_match('/^wp-[a-z0-9_-]+\.php$/i', $name);
+    }
+
+    /** What a removal would delete: for the confirmation screen. */
+    public function wpRemovalPlan(Service $service, int $id): ?array
+    {
+        $site = $this->wpOwnSite($service, $id);
+        if (! $site) {
+            return null;
+        }
+        $user = (string) ($this->cpAccount($service)[1] ?? '');
+        $c = $this->wpt($service, 'get', '/v1/remover/confirmation', ['installationsIds' => [$id]]);
+        $info = $c['ok'] ? (collect((array) $c['data'])->firstWhere('id', $id) ?? []) : [];
+
+        $keep = fn (array $x, string $prefixed) => ($x['name'] ?? '') !== ''
+            && ! empty($x['removingAllowed'])
+            && empty($x['sharedWithInstallationsIds'])
+            && str_starts_with((string) $x['name'], $user.'_');
+
+        $list = $this->listFiles($service, (string) $site['path']);
+        $files = [];
+        foreach ((array) ($list['entries'] ?? []) as $e) {
+            if (self::isWordPressFile((string) $e['name'])) {
+                $files[] = $e['name'];
+            }
+        }
+        sort($files);
+
+        return [
+            'site' => $site,
+            'host' => strtolower((string) parse_url((string) $site['url'], PHP_URL_HOST)),
+            'path' => (string) $site['path'],
+            'files' => $files,
+            'others' => count((array) ($list['entries'] ?? [])) - count($files),
+            'database' => $keep($info['database'] ?? [], 'db') ? (string) $info['database']['name'] : null,
+            'databaseShared' => ! empty($info['database']['sharedWithInstallationsIds']),
+            'dbUser' => $keep($info['user'] ?? [], 'user') ? (string) $info['user']['name'] : null,
+            'listed' => (bool) ($list['ok'] ?? false),
+        ];
+    }
+
+    /** $confirm must be the site's address (e.g. example.com/blog), typed by the client. */
+    public function wpRemoveSite(Service $service, int $id, string $confirm, bool $dropDatabase = true): array
+    {
+        $plan = $this->wpRemovalPlan($service, $id);
+        if (! $plan) {
+            return $this->fail('That site is not part of this hosting account.');
+        }
+        $expect = rtrim(preg_replace('#^https?://#i', '', strtolower((string) $plan['site']['url'])), '/');
+        if (rtrim(strtolower(trim(preg_replace('#^https?://#i', '', $confirm))), '/') !== $expect) {
+            return $this->fail("Type {$expect} to confirm.");
+        }
+        $home = $this->home($service);
+        if (! $plan['listed'] || $plan['path'] === $home || ! str_starts_with($plan['path'].'/', $home.'/')) {
+            return $this->fail('The site\'s folder could not be read, so nothing was removed.');
+        }
+        if (! $plan['files']) {
+            return $this->fail('No WordPress files were found in '.$plan['path'].', so nothing was removed.');
+        }
+
+        // 1. Files → trash (recoverable in cPanel's File Manager until the trash is emptied).
+        $files = $this->deleteEntries($service, array_map(fn ($f) => $plan['path'].'/'.$f, $plan['files']));
+        if (! ($files['success'] ?? false)) {
+            return $this->fail('Could not remove the files: '.($files['message'] ?? 'unknown error').' Nothing else was changed.');
+        }
+        $done = ['WordPress files moved to the trash'];
+        $warn = [];
+
+        // 2. Database and its user.
+        $acc = $this->cpAccount($service);
+        if ($dropDatabase && $plan['database']) {
+            $r = $this->uapi($acc[0], $acc[1], 'Mysql', 'delete_database', ['name' => $plan['database']]);
+            $r['success'] ? $done[] = "database {$plan['database']} deleted" : $warn[] = "the database {$plan['database']} could not be deleted ({$r['message']})";
+        } elseif ($plan['databaseShared']) {
+            $warn[] = 'the database was kept because another site uses it';
+        }
+        if ($dropDatabase && $plan['dbUser']) {
+            $r = $this->uapi($acc[0], $acc[1], 'Mysql', 'delete_user', ['name' => $plan['dbUser']]);
+            $r['success'] ? $done[] = "database user {$plan['dbUser']} deleted" : $warn[] = "the database user {$plan['dbUser']} could not be deleted";
+        }
+
+        // 3. Let WP Toolkit notice the site is gone.
+        $this->wpt($service, 'post', '/v1/scanner', [], ['users' => [$acc[1]]]);
+        unset($this->wptSitesMemo[$service->id]);
+        $this->forget();
+
+        Log::info("CPanelPro: WordPress site #{$id} ({$expect}) removed for service #{$service->id}: ".implode('; ', array_merge($done, $warn)));
+
+        return $this->buildResult(true, ucfirst(implode(', ', $done)).'.'.($warn ? ' Note: '.implode('; ', $warn).'.' : '')
+            .' It can take a minute to disappear from the list.');
+    }
 }

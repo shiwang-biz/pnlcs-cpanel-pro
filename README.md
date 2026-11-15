@@ -125,7 +125,7 @@ vulnerability protection). A **WordPress** tile opens the client's sites; each s
 | **Security** | Hardening measures (apply / revert, recommended ones pre-selected), known vulnerabilities with risk level and fixed-in version |
 | **Backups** | Back up files and database, restore, delete |
 | **Clone** | Copy the site to a new subdomain (e.g. `staging.`) or an existing domain, with a new database |
-| **Settings** | The WordPress administrator's email, password and site language |
+| **Settings** | The WordPress administrator's email, password and site language, and **Remove this site** *(1.4.1)* |
 
 Long jobs (install, updates, backups, clone, security) run in WP Toolkit's background; the page shows their progress
 and refreshes when they finish.
@@ -134,8 +134,15 @@ and refreshes when they finish.
 session **of the client's own cPanel user** (WHM `create_user_session`), so WP Toolkit itself only lets them see and
 change their own sites. On top of that, every site id, domain, plugin/theme slug, backup file and security measure from
 the browser is checked against the account's own lists; site paths must be inside `/home/<user>`. The admin password
-WP Toolkit stores is never sent to the browser. Removing a WordPress site stays in cPanel's WP Toolkit (the REST API has
-no removal call).
+WP Toolkit stores is never sent to the browser.
+
+**Removing a site (1.4.1):** WP Toolkit's REST API has no removal call (only the root-only `wp-toolkit --remove`
+command), so the module does it with cPanel's own APIs. It asks WP Toolkit which database and database user belong to
+the site, moves **only WordPress's own files** in the site's folder (`wp-admin`, `wp-includes`, `wp-content`,
+`wp-*.php`, `index.php`, `xmlrpc.php`, `license.txt`, `readme.html`) to the cPanel **trash** (recoverable until the
+trash is emptied), deletes the database and its user (unless another site shares them, they aren't the account's own,
+or the client unticks it), then rescans so WP Toolkit forgets the site. Other sites, folders and `.htaccess` in the same
+folder are left alone. The client must type the site's address to confirm.
 
 ### Usage warnings (1.3)
 
